@@ -1,0 +1,11 @@
+[app]
+default_tts_voice = "voice-catalog:warm_female"
+voxcpm2_base_url = "https://your-voxcpm2-domain.com/v1"
+voxcpm2_api_key = ""
+voxcpm2_model_name = "voxcpm2"
+voxcpm2_timeout = 120
+voxcpm2_send_voice_prompt = true
+
+[ui]
+tts_server = "voice-catalog"
+voice_name = "voice-catalog:warm_female"

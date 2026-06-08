@@ -1,0 +1,22 @@
+services:
+  voxcpm2:
+    build:
+      context: .
+    image: claw-voxcpm2-cloud:latest
+    container_name: claw-voxcpm2-cloud
+    ipc: host
+    ports:
+      - "${VOXCPM2_PORT:-8000}:8000"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_LOGGING_LEVEL: ${VLLM_LOGGING_LEVEL:-INFO}
+    volumes:
+      - ${HF_CACHE_DIR:-./hf-cache}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-1}
+              capabilities: [gpu]

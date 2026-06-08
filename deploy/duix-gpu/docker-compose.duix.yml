@@ -1,0 +1,24 @@
+# Duix Avatar deployment override.
+#
+# Usage:
+#   export DUIX_HOME=/opt/duix_avatar_data
+#   docker compose -f docker-compose.yml -f deploy/duix-gpu/docker-compose.duix.yml up -d --build
+#
+# This file assumes Duix Avatar runs on the same host and exposes port 8383.
+# The app containers talk to it through host.docker.internal and share Duix's
+# face2face temp directory through /duix_workspace/face2face/temp.
+
+services:
+  webui:
+    ports:
+      - "0.0.0.0:8502:8501"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${DUIX_HOME:-/opt/duix_avatar_data}/face2face/temp:/duix_workspace/face2face/temp
+
+  api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${DUIX_HOME:-/opt/duix_avatar_data}/face2face/temp:/duix_workspace/face2face/temp
