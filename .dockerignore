@@ -1,24 +1,32 @@
-# Exclude common Python files and directories
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pyz
-*.pyw
-*.pyi
-*.egg-info/
+.git
+.gitignore
+.DS_Store
 
-# Exclude development and local files
+config.toml
 .env
 .env.*
-*.log
-*.db
-
-# Exclude version control system files
-.git/
-.gitignore
-.svn/
+!.env.example
 
 storage/
-config.toml
+logs/
+debug/
+models/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+.idea/
+.vscode/
+node_modules/
+
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer

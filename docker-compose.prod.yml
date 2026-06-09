@@ -1,0 +1,65 @@
+name: claw-official
+
+x-common-build: &common-build
+  context: .
+  dockerfile: Dockerfile
+
+x-common-volumes: &common-volumes
+  - ./config.toml:/MoneyPrinterTurbo/config.toml
+  - ./storage:/MoneyPrinterTurbo/storage
+
+x-common-extra-hosts: &common-extra-hosts
+  - "host.docker.internal:host-gateway"
+
+services:
+  webui:
+    build: *common-build
+    image: claw-official-webui:latest
+    container_name: claw-official-webui
+    ports:
+      - "${CLAW_WEBUI_HOST:-0.0.0.0}:${CLAW_WEBUI_PORT:-8502}:8501"
+    command:
+      - streamlit
+      - run
+      - ./webui/Main.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --browser.gatherUsageStats=False
+      - --server.enableCORS=False
+      - --server.enableXsrfProtection=True
+    volumes: *common-volumes
+    extra_hosts: *common-extra-hosts
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  api:
+    build: *common-build
+    image: claw-official-api:latest
+    container_name: claw-official-api
+    ports:
+      - "${CLAW_API_HOST:-127.0.0.1}:${CLAW_API_PORT:-8080}:8080"
+    command:
+      - python3
+      - main.py
+    volumes: *common-volumes
+    extra_hosts: *common-extra-hosts
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ping', timeout=5)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
