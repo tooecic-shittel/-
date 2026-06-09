@@ -13,9 +13,11 @@ import threading
 import time
 from datetime import datetime
 from typing import Union
+from urllib.parse import quote, urlparse
 from xml.sax.saxutils import unescape
 
 import edge_tts
+import jwt
 import requests
 from edge_tts import SubMaker
 from loguru import logger
@@ -29,6 +31,22 @@ from app.utils import utils
 _DEFAULT_EDGE_TTS_TIMEOUT_SECONDS = 30.0
 _MIMO_DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
 _MIMO_DEFAULT_TTS_MODEL = "mimo-v2.5-tts"
+_KLING_DEFAULT_BASE_URL = "https://api-beijing.klingai.com"
+_KLING_DEFAULT_TTS_PATH = "/v1/audio/tts"
+_KLING_DEFAULT_CUSTOM_VOICE_PATH = "/v1/general/custom-voices"
+_KLING_DEFAULT_PRESET_VOICE_PATH = "/v1/general/presets-voices"
+_KLING_TTS_PRESET_VOICES = [
+    {
+        "voice_id": "genshin_vindi2",
+        "voice_name": "温迪男声",
+        "voice_language": "zh",
+    },
+    {
+        "voice_id": "oversea_male1",
+        "voice_name": "English Male",
+        "voice_language": "en",
+    },
+]
 _MINIMAX_DEFAULT_BASE_URLS = [
     "https://api.minimaxi.com/v1",
     "https://api.minimax.io/v1",
@@ -489,6 +507,36 @@ def get_minimax_voice_label(voice_name: str) -> str:
     return labels.get(voice_id, voice_name)
 
 
+def get_kling_voices() -> list[str]:
+    voices: list[str] = []
+    configured_voice_id = (config.app.get("kling_tts_voice_id", "") or "").strip()
+    if configured_voice_id:
+        voices.append(f"kling:{configured_voice_id}-Default")
+
+    for item in _KLING_TTS_PRESET_VOICES:
+        voices.append(f"kling:{item['voice_id']}-{item['voice_name']}")
+
+    if config.app.get("kling_show_custom_voices", False):
+        for item in _kling_list_voices(
+            config.app.get("kling_custom_voice_path", _KLING_DEFAULT_CUSTOM_VOICE_PATH)
+        ):
+            voice_id = item.get("voice_id")
+            voice_name = item.get("voice_name") or "Kling"
+            if voice_id:
+                voices.append(f"kling:{voice_id}-{voice_name}")
+
+    unique_voices = []
+    for voice in voices:
+        if voice not in unique_voices:
+            unique_voices.append(voice)
+    return unique_voices
+
+
+def get_kling_voice_label(voice_name: str) -> str:
+    voice_id, label = parse_kling_voice(voice_name, include_label=True)
+    return f"可灵｜{label or voice_id}" if voice_id else voice_name
+
+
 def get_openai_tts_voices() -> list[str]:
     voices_with_gender = [
         ("nova", "Female"),
@@ -587,6 +635,21 @@ def parse_minimax_voice(voice_name: str) -> str:
     return voice_name.replace("-Female", "").replace("-Male", "").strip()
 
 
+def parse_kling_voice(
+    voice_name: str,
+    include_label: bool = False,
+) -> str | tuple[str, str]:
+    voice_name = (voice_name or "").strip()
+    if voice_name.startswith("kling:"):
+        voice_name = voice_name.split(":", 1)[1]
+    voice_id, _, label = voice_name.partition("-")
+    voice_id = voice_id.strip()
+    label = label.strip()
+    if include_label:
+        return voice_id, label
+    return voice_id
+
+
 def is_azure_v2_voice(voice_name: str):
     voice_name = parse_voice_name(voice_name)
     if voice_name.endswith("-V2"):
@@ -612,6 +675,11 @@ def is_mimo_voice(voice_name: str):
 def is_minimax_voice(voice_name: str):
     """检查是否是 MiniMax TTS 的声音"""
     return (voice_name or "").startswith("minimax:")
+
+
+def is_kling_voice(voice_name: str):
+    """检查是否是可灵 TTS 音色。"""
+    return (voice_name or "").startswith("kling:")
 
 
 def is_openai_tts_voice(voice_name: str):
@@ -686,6 +754,14 @@ def tts(
             voice_file,
             voice_volume,
         )
+    elif is_kling_voice(voice_name):
+        sub_maker = kling_tts(
+            text,
+            parse_kling_voice(voice_name),
+            voice_rate,
+            voice_file,
+            voice_volume,
+        )
     elif is_openai_tts_voice(voice_name):
         sub_maker = openai_compatible_tts(
             text, voice_name, voice_rate, voice_file, voice_volume
@@ -704,6 +780,7 @@ def tts(
         config.app.get("enable_openai_tts_fallback", True)
         and not is_openai_tts_voice(voice_name)
         and not is_voice_catalog_voice(voice_name)
+        and not is_kling_voice(voice_name)
     ):
         fallback_voice = config.app.get("openai_tts_voice", "openai-tts:nova-Female")
         sub_maker = openai_compatible_tts(
@@ -1579,6 +1656,301 @@ def voxcpm2_tts(
         provider_label="VoxCPM2 cloud TTS",
         require_api_key=False,
     )
+
+
+def _kling_base_url() -> str:
+    return (config.app.get("kling_base_url", "") or _KLING_DEFAULT_BASE_URL).rstrip("/")
+
+
+def _kling_endpoint(path: str) -> str:
+    return f"{_kling_base_url()}/{path.lstrip('/')}"
+
+
+def _kling_headers() -> dict:
+    api_key = (config.app.get("kling_api_key", "") or "").strip()
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+
+    access_key = (config.app.get("kling_access_key", "") or "").strip()
+    secret_key = (config.app.get("kling_secret_key", "") or "").strip()
+    if not access_key or not secret_key:
+        logger.warning("Kling access key or secret key is not configured")
+        return {}
+
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": access_key,
+            "exp": now + int(config.app.get("kling_jwt_ttl", 1800) or 1800),
+            "nbf": now - int(config.app.get("kling_jwt_nbf_skew", 5) or 5),
+        },
+        secret_key,
+        algorithm="HS256",
+        headers={"alg": "HS256", "typ": "JWT"},
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _kling_request(
+    method: str,
+    path: str,
+    payload: dict | None = None,
+    timeout: float | None = None,
+) -> dict:
+    headers = _kling_headers()
+    if not headers:
+        return {}
+    headers["Content-Type"] = "application/json"
+
+    try:
+        response = requests.request(
+            method=method,
+            url=_kling_endpoint(path),
+            json=payload,
+            headers=headers,
+            timeout=timeout or float(config.app.get("kling_request_timeout", 30) or 30),
+            verify=config.app.get("tls_verify", True),
+        )
+    except Exception as exc:
+        logger.warning(f"failed to request Kling {path}: {str(exc)}")
+        return {}
+
+    if response.status_code >= 400:
+        logger.warning(
+            f"Kling {path} failed: {response.status_code}, {response.text[:500]}"
+        )
+        return {}
+
+    try:
+        data = response.json()
+    except Exception as exc:
+        logger.warning(f"Kling {path} returned invalid JSON: {str(exc)}")
+        return {}
+
+    code = data.get("code")
+    if code is not None and str(code).strip() not in {"0", "200"}:
+        logger.warning(
+            f"Kling {path} returned an error: {code} {data.get('message', '')}"
+        )
+        return {}
+    return data
+
+
+def _kling_extract_voices(data: dict) -> list[dict]:
+    task_items = data.get("data") or []
+    if isinstance(task_items, dict):
+        task_items = [task_items]
+    voices: list[dict] = []
+    for task_item in task_items:
+        if not isinstance(task_item, dict):
+            continue
+        task_result = task_item.get("task_result") or {}
+        task_voices = task_result.get("voices") or []
+        for voice_item in task_voices:
+            if isinstance(voice_item, dict) and voice_item.get("voice_id"):
+                voices.append(voice_item)
+    return voices
+
+
+def _kling_list_voices(path: str) -> list[dict]:
+    data = _kling_request("GET", f"{path}?pageNum=1&pageSize=50")
+    if not data:
+        return []
+    return _kling_extract_voices(data)
+
+
+def _kling_public_base_url() -> str:
+    return (
+        config.app.get("kling_public_base_url", "")
+        or config.app.get("endpoint", "")
+        or ""
+    ).rstrip("/")
+
+
+def _kling_url_is_allowed(url: str) -> bool:
+    if config.app.get("kling_allow_local_urls", False):
+        return True
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if not parsed.scheme.startswith("http") or not hostname:
+        return False
+    if hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return False
+    return True
+
+
+def _kling_task_file_url(file_path: str, purpose: str) -> str:
+    if re.match(r"^https?://", file_path or "", re.IGNORECASE):
+        return file_path
+    if not file_path or not os.path.exists(file_path):
+        logger.warning(f"Kling {purpose} file does not exist")
+        return ""
+
+    public_base_url = _kling_public_base_url()
+    if not public_base_url or not _kling_url_is_allowed(public_base_url):
+        logger.warning(
+            "Kling voice clone requires a public URL for the sample file. "
+            "Set kling_public_base_url or endpoint to a public domain."
+        )
+        return ""
+
+    tasks_root = os.path.abspath(utils.task_dir())
+    resolved_path = os.path.abspath(file_path)
+    if not resolved_path.startswith(tasks_root + os.sep):
+        logger.warning(f"Kling {purpose} file is not under the task storage dir")
+        return ""
+
+    relative_path = os.path.relpath(resolved_path, tasks_root).replace(os.sep, "/")
+    return f"{public_base_url.rstrip('/')}/tasks/{quote(relative_path, safe='/')}"
+
+
+def _kling_audio_url(task_data: dict) -> str:
+    task_data = task_data.get("data") or task_data
+    result = task_data.get("task_result") or {}
+    audios = result.get("audios") or []
+    for item in audios:
+        if isinstance(item, dict) and item.get("url"):
+            return str(item["url"])
+    return ""
+
+
+def _download_kling_audio(audio_url: str, voice_file: str) -> bool:
+    try:
+        ensure_file_path_exists(voice_file)
+        with requests.get(
+            audio_url,
+            stream=True,
+            timeout=float(config.app.get("kling_tts_download_timeout", 120) or 120),
+            verify=config.app.get("tls_verify", True),
+        ) as response:
+            if response.status_code >= 400:
+                logger.error(
+                    f"download Kling TTS audio failed: "
+                    f"{response.status_code}, {response.text[:500]}"
+                )
+                return False
+            with open(voice_file, "wb") as file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        file.write(chunk)
+    except Exception as exc:
+        logger.error(f"failed to download Kling TTS audio: {str(exc)}")
+        return False
+    return os.path.exists(voice_file) and os.path.getsize(voice_file) > 1000
+
+
+def kling_tts(
+    text: str,
+    voice_name: str,
+    voice_rate: float,
+    voice_file: str,
+    voice_volume: float = 1.0,
+) -> Union[SubMaker, None]:
+    text = (text or "").strip()
+    if not text:
+        logger.error("Kling TTS text is empty")
+        return None
+
+    voice_id = (voice_name or config.app.get("kling_tts_voice_id", "") or "").strip()
+    if not voice_id:
+        logger.error("Kling TTS voice id is not configured")
+        return None
+
+    request_text = text[:1000]
+    if len(text) > 1000:
+        logger.warning("Kling TTS text exceeds 1000 characters; truncating for API")
+
+    payload = {
+        "text": request_text,
+        "voice_id": voice_id,
+        "voice_language": config.app.get("kling_tts_voice_language", "zh") or "zh",
+        "voice_speed": round(max(0.8, min(2.0, float(voice_rate or 1.0))), 1),
+    }
+    data = _kling_request(
+        "POST",
+        config.app.get("kling_tts_path", _KLING_DEFAULT_TTS_PATH),
+        payload=payload,
+        timeout=float(config.app.get("kling_tts_timeout", 90) or 90),
+    )
+    audio_url = _kling_audio_url(data)
+    if not audio_url:
+        logger.error("Kling TTS response did not include an audio URL")
+        return None
+
+    if not _download_kling_audio(audio_url, voice_file):
+        return None
+
+    audio_clip = AudioFileClip(voice_file)
+    try:
+        audio_duration = audio_clip.duration
+    finally:
+        audio_clip.close()
+
+    sub_maker = ensure_legacy_submaker_fields(SubMaker())
+    logger.success(f"Kling TTS succeeded: {voice_file}, duration: {audio_duration:.3f}s")
+    return populate_legacy_submaker_with_full_text(
+        sub_maker=sub_maker,
+        text=request_text,
+        audio_duration_seconds=audio_duration,
+    )
+
+
+def kling_clone_voice(
+    task_id: str,
+    sample_file: str,
+    voice_name: str = "",
+) -> str:
+    sample_url = _kling_task_file_url(sample_file, "voice clone sample")
+    if not sample_url:
+        return ""
+
+    payload = {
+        "voice_name": (voice_name or f"爪爪音色{task_id[:6]}")[:20],
+        "voice_url": sample_url,
+        "callback_url": config.app.get("kling_callback_url", "") or "",
+        "external_task_id": f"claw-voice-{task_id}",
+    }
+    data = _kling_request(
+        "POST",
+        config.app.get("kling_custom_voice_path", _KLING_DEFAULT_CUSTOM_VOICE_PATH),
+        payload=payload,
+        timeout=float(config.app.get("kling_request_timeout", 30) or 30),
+    )
+    task_data = data.get("data") or {}
+    clone_task_id = str(task_data.get("task_id") or "")
+    if not clone_task_id:
+        logger.warning("Kling voice clone response did not include a task id")
+        return ""
+
+    deadline = time.time() + int(config.app.get("kling_voice_clone_timeout", 600) or 600)
+    interval = max(5, int(config.app.get("kling_poll_interval", 5) or 5))
+    query_path = config.app.get(
+        "kling_custom_voice_path",
+        _KLING_DEFAULT_CUSTOM_VOICE_PATH,
+    ).rstrip("/")
+
+    while time.time() < deadline:
+        result = _kling_request("GET", f"{query_path}/{clone_task_id}")
+        task = result.get("data") or {}
+        status = str(task.get("task_status", "")).lower()
+        if status == "succeed":
+            voices = _kling_extract_voices(result)
+            if voices:
+                voice_id = str(voices[0].get("voice_id") or "")
+                logger.success(f"Kling voice clone succeeded: {voice_id}")
+                return voice_id
+            logger.warning("Kling voice clone succeeded without voice id")
+            return ""
+        if status == "failed":
+            logger.warning(
+                "Kling voice clone failed: "
+                f"{task.get('task_status_msg') or result.get('message') or ''}"
+            )
+            return ""
+        time.sleep(interval)
+
+    logger.warning("Kling voice clone timed out")
+    return ""
 
 
 def voice_catalog_tts(

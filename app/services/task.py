@@ -95,12 +95,42 @@ def generate_audio(task_id, params, video_script):
         else:
             logger.info("no custom audio file provided, using TTS to generate audio.")
         audio_file = path.join(utils.task_dir(task_id), "audio.mp3")
-        sub_maker = voice.tts(
-            text=video_script,
-            voice_name=voice.parse_voice_name(params.voice_name),
-            voice_rate=params.voice_rate,
-            voice_file=audio_file,
-        )
+        selected_voice_name = voice.parse_voice_name(params.voice_name)
+        voice_clone_sample_file = getattr(params, "voice_clone_sample_file", "") or ""
+        sub_maker = None
+        if (
+            getattr(params, "voice_clone_enabled", False)
+            and voice_clone_sample_file
+            and os.path.exists(voice_clone_sample_file)
+        ):
+            cloned_voice_id = voice.kling_clone_voice(
+                task_id=task_id,
+                sample_file=voice_clone_sample_file,
+            )
+            if cloned_voice_id:
+                sub_maker = voice.kling_tts(
+                    text=video_script,
+                    voice_name=cloned_voice_id,
+                    voice_rate=params.voice_rate,
+                    voice_file=audio_file,
+                )
+                if not sub_maker:
+                    logger.warning(
+                        "Kling cloned voice is not usable for TTS yet; "
+                        "falling back to the selected voice."
+                    )
+            else:
+                logger.warning(
+                    "Kling voice clone did not produce a voice id; "
+                    "falling back to the selected TTS voice."
+                )
+        if sub_maker is None:
+            sub_maker = voice.tts(
+                text=video_script,
+                voice_name=selected_voice_name,
+                voice_rate=params.voice_rate,
+                voice_file=audio_file,
+            )
         if sub_maker is None:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
             logger.error(

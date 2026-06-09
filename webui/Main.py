@@ -1979,6 +1979,7 @@ with middle_panel:
         st.write(tr("Audio Settings"))
 
         public_tts_servers = [
+            ("kling-tts", "可灵 TTS（推荐）"),
             ("voice-catalog", "智能音色库（推荐）"),
         ]
         admin_tts_servers = [
@@ -2019,6 +2020,8 @@ with middle_panel:
 
         if selected_tts_server == "voice-catalog":
             filtered_voices = voice.get_voice_catalog_voices()
+        elif selected_tts_server == "kling-tts":
+            filtered_voices = voice.get_kling_voices()
         elif selected_tts_server == "openai-tts":
             filtered_voices = voice.get_openai_tts_voices()
         elif selected_tts_server == "siliconflow":
@@ -2051,6 +2054,8 @@ with middle_panel:
         for v in filtered_voices:
             if voice.is_voice_catalog_voice(v):
                 friendly_names[v] = voice.get_voice_catalog_label(v)
+            elif voice.is_kling_voice(v):
+                friendly_names[v] = voice.get_kling_voice_label(v)
             elif voice.is_minimax_voice(v):
                 friendly_names[v] = voice.get_minimax_voice_label(v)
             elif voice.is_openai_tts_voice(v):
@@ -2103,6 +2108,9 @@ with middle_panel:
             config.ui["voice_name"] = voice_name
             if selected_tts_server == "voice-catalog":
                 config.app["default_tts_voice"] = voice_name
+            elif selected_tts_server == "kling-tts":
+                config.app["default_tts_voice"] = voice_name
+                config.app["kling_tts_voice_id"] = voice.parse_kling_voice(voice_name)
             elif selected_tts_server == "openai-tts":
                 config.app["openai_tts_voice"] = voice_name
         else:

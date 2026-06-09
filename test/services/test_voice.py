@@ -61,6 +61,87 @@ class TestVoiceService(unittest.TestCase):
             all(v.startswith(("zh-CN", "en-US")) for v in filtered)
         )
 
+    def test_parse_kling_voice(self):
+        self.assertEqual(vs.parse_kling_voice("kling:genshin_vindi2-温迪男声"), "genshin_vindi2")
+        self.assertEqual(
+            vs.parse_kling_voice("kling:abc123-老板音色", include_label=True),
+            ("abc123", "老板音色"),
+        )
+
+    def test_kling_extract_voices_from_task_result(self):
+        data = {
+            "data": [
+                {
+                    "task_result": {
+                        "voices": [
+                            {
+                                "voice_id": "voice-1",
+                                "voice_name": "老板音色",
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+        voices = vs._kling_extract_voices(data)
+
+        self.assertEqual(voices[0]["voice_id"], "voice-1")
+
+    def test_kling_tts_uses_official_payload(self):
+        calls = {}
+
+        def fake_request(method, path, payload=None, timeout=None):
+            calls["method"] = method
+            calls["path"] = path
+            calls["payload"] = payload
+            return {
+                "code": 0,
+                "data": {
+                    "task_status": "succeed",
+                    "task_result": {
+                        "audios": [
+                            {
+                                "url": "https://cdn.example.test/audio.mp3",
+                            }
+                        ]
+                    },
+                },
+            }
+
+        def fake_download(audio_url, voice_file):
+            calls["audio_url"] = audio_url
+            Path(voice_file).write_bytes(b"fake-audio")
+            return True
+
+        class FakeAudioFileClip:
+            def __init__(self, _path):
+                self.duration = 2.5
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            vs, "_kling_request", fake_request
+        ), patch.object(vs, "_download_kling_audio", fake_download), patch.object(
+            vs, "AudioFileClip", FakeAudioFileClip
+        ):
+            voice_file = str(Path(tmp_dir) / "kling.mp3")
+            sub_maker = vs.kling_tts(
+                text="欢迎来到爪爪电商",
+                voice_name="genshin_vindi2",
+                voice_rate=1.0,
+                voice_file=voice_file,
+            )
+
+        self.assertIsNotNone(sub_maker)
+        self.assertEqual(calls["method"], "POST")
+        self.assertEqual(calls["path"], "/v1/audio/tts")
+        self.assertEqual(calls["payload"]["text"], "欢迎来到爪爪电商")
+        self.assertEqual(calls["payload"]["voice_id"], "genshin_vindi2")
+        self.assertEqual(calls["payload"]["voice_language"], "zh")
+        self.assertEqual(calls["audio_url"], "https://cdn.example.test/audio.mp3")
+
     def test_siliconflow(self):
         # SiliconFlow 的 API Key 存在 [siliconflow].api_key 中，运行时代码也是从
         # config.siliconflow 读取；这里必须使用同一配置源，避免正确配置凭据时

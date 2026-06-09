@@ -93,6 +93,15 @@ kling_request_timeout = 30
 kling_jwt_ttl = 1800
 kling_jwt_nbf_skew = 5
 kling_allow_local_urls = false
+kling_tts_path = "/v1/audio/tts"
+kling_tts_voice_id = "" # 可灵预置/克隆音色 ID；WebUI 选择可灵音色后会自动写入
+kling_tts_voice_language = "zh" # zh / en
+kling_tts_timeout = 90
+kling_tts_download_timeout = 120
+kling_custom_voice_path = "/v1/general/custom-voices"
+kling_preset_voice_path = "/v1/general/presets-voices"
+kling_voice_clone_timeout = 600
+kling_show_custom_voices = false # 当前账号确认自定义 voice_id 可用于 TTS 后再打开
 
 # 是否校验外部 API 和素材下载的 TLS 证书。
 # 默认必须开启，避免 Pexels/Pixabay API key 和下载素材被中间人攻击篡改。
