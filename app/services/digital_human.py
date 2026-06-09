@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import ipaddress
 import os
@@ -22,8 +23,11 @@ _DUIX_DEFAULT_WORKSPACE_DIR = "~/duix_avatar_data/face2face/temp"
 _DUIX_CLOUD_DEFAULT_BASE_URL = "https://meta.guiji.ai"
 _DUIX_CLOUD_DEFAULT_TIMEOUT_SECONDS = 900
 _DUIX_CLOUD_TOKEN_REFRESH_SKEW_SECONDS = 60
-_KLING_DEFAULT_BASE_URL = "https://api-singapore.klingai.com"
+_KLING_DEFAULT_BASE_URL = "https://api-beijing.klingai.com"
+_KLING_DEFAULT_AVATAR_PATH = "/v1/videos/avatar/image2video"
 _KLING_DEFAULT_TIMEOUT_SECONDS = 900
+_KLING_MAX_AVATAR_IMAGE_BYTES = 10 * 1024 * 1024
+_KLING_MAX_AUDIO_BYTES = 5 * 1024 * 1024
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 _LOCAL_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
@@ -170,6 +174,34 @@ def _make_video_from_image(image_file: str, task_id: str) -> str:
         subprocess.run(command, check=True, capture_output=True, text=True)
     except Exception as exc:
         logger.warning(f"failed to convert image to avatar video: {str(exc)}")
+        return ""
+    return output_file
+
+
+def _make_image_from_video(video_file: str, task_id: str) -> str:
+    task_dir = utils.task_dir(task_id)
+    output_file = os.path.join(task_dir, "digital-human-avatar.jpg")
+    ffmpeg_binary = video_service.get_ffmpeg_binary()
+    command = [
+        ffmpeg_binary,
+        "-y",
+        "-ss",
+        "0.5",
+        "-i",
+        video_file,
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=720:-2",
+        "-q:v",
+        "2",
+        output_file,
+    ]
+    logger.info("extracting spokesperson image for Kling Avatar")
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except Exception as exc:
+        logger.warning(f"failed to extract avatar image from video: {str(exc)}")
         return ""
     return output_file
 
@@ -817,8 +849,64 @@ def _kling_file_url(file_path: str, purpose: str) -> str:
     return f"{public_base_url.rstrip('/')}/tasks/{quote(relative_path, safe='/')}"
 
 
+def _kling_file_base64(file_path: str, purpose: str, max_bytes: int) -> str:
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError:
+        logger.warning(f"Kling {purpose} file does not exist")
+        return ""
+
+    if file_size > max_bytes:
+        logger.warning(
+            f"Kling {purpose} file is too large for direct Base64 upload: "
+            f"{file_size} bytes"
+        )
+        return ""
+
+    try:
+        with open(file_path, "rb") as file:
+            return base64.b64encode(file.read()).decode("ascii")
+    except Exception as exc:
+        logger.warning(f"failed to encode Kling {purpose} file: {str(exc)}")
+        return ""
+
+
+def _kling_file_input(file_path: str, purpose: str, max_bytes: int) -> str:
+    if _looks_like_url(file_path):
+        return file_path
+
+    if not file_path or not os.path.exists(file_path):
+        logger.warning(f"Kling {purpose} file does not exist")
+        return ""
+
+    public_base_url = _kling_public_base_url()
+    tasks_root = os.path.abspath(utils.task_dir())
+    resolved_path = os.path.abspath(file_path)
+    if (
+        public_base_url
+        and _kling_url_is_allowed(public_base_url)
+        and resolved_path.startswith(tasks_root + os.sep)
+    ):
+        relative_path = os.path.relpath(resolved_path, tasks_root).replace(os.sep, "/")
+        return f"{public_base_url.rstrip('/')}/tasks/{quote(relative_path, safe='/')}"
+
+    return _kling_file_base64(file_path, purpose, max_bytes)
+
+
 def _kling_lip_sync_path() -> str:
-    return _config_str("kling_lip_sync_path", "/v1/videos/lip-sync")
+    return _kling_avatar_path()
+
+
+def _kling_avatar_path() -> str:
+    configured = _config_str("kling_avatar_path")
+    if configured:
+        return configured
+
+    legacy_path = _config_str("kling_lip_sync_path")
+    if legacy_path and legacy_path != "/v1/videos/lip-sync":
+        return legacy_path
+
+    return _KLING_DEFAULT_AVATAR_PATH
 
 
 def _kling_query_paths(task_id: str) -> list[str]:
@@ -827,11 +915,11 @@ def _kling_query_paths(task_id: str) -> list[str]:
     if configured:
         paths.append(configured.format(task_id=task_id))
 
-    lip_sync_path = _kling_lip_sync_path().rstrip("/")
+    lip_sync_path = _kling_avatar_path().rstrip("/")
     paths.extend(
         [
             f"{lip_sync_path}/{task_id}",
-            f"/v1/videos/{task_id}",
+            f"{_KLING_DEFAULT_AVATAR_PATH}/{task_id}",
         ]
     )
 
@@ -842,13 +930,37 @@ def _kling_query_paths(task_id: str) -> list[str]:
     return unique_paths
 
 
-def _kling_build_payload(video_url: str, audio_url: str, task_id: str) -> dict:
-    payload_format = _config_str("kling_payload_format", "input").lower()
+def _kling_build_payload(
+    image_url: str,
+    audio_url: str,
+    task_id: str,
+    script_text: str = "",
+) -> dict:
+    payload_format = _config_str("kling_payload_format", "avatar").lower()
     model_name = _config_str("kling_model_name")
+
+    if payload_format == "avatar":
+        payload = {
+            "image": image_url,
+            "sound_file": audio_url,
+            "prompt": _config_str("kling_prompt", script_text)[:2500],
+            "mode": _config_str("kling_avatar_mode", "std"),
+        }
+        audio_id = _config_str("kling_audio_id")
+        if audio_id:
+            payload.pop("sound_file", None)
+            payload["audio_id"] = audio_id
+        callback_url = _config_str("kling_callback_url")
+        if callback_url:
+            payload["callback_url"] = callback_url
+        external_task_id = _config_str("kling_external_task_id_prefix")
+        if external_task_id:
+            payload["external_task_id"] = f"{external_task_id}-{task_id}"
+        return payload
 
     if payload_format == "flat":
         payload = {
-            "video_url": video_url,
+            "video_url": image_url,
             "audio_url": audio_url,
         }
         if model_name:
@@ -857,7 +969,7 @@ def _kling_build_payload(video_url: str, audio_url: str, task_id: str) -> dict:
 
     payload = {
         "input": {
-            "video_url": video_url,
+            "video_url": image_url,
             "mode": _config_str("kling_lip_sync_mode", "audio2video"),
             "audio_type": _config_str("kling_audio_type", "url"),
             "audio_url": audio_url,
@@ -913,29 +1025,58 @@ def _kling_status_value(task_data: dict) -> str:
     return ""
 
 
-def _kling_create_lip_sync(task_id: str, avatar_file: str, audio_file: str) -> str:
-    if not _is_video_file(avatar_file):
-        logger.warning(
-            "Kling lip-sync currently requires a spokesperson video; "
-            "photo-only material should use another image-to-video route first"
-        )
+def _prepare_kling_avatar_image(task_id: str, avatar_file: str) -> str:
+    if not os.path.exists(avatar_file):
+        logger.warning(f"Kling Avatar spokesperson file is missing: {avatar_file}")
         return ""
 
-    video_url = _kling_file_url(avatar_file, "spokesperson video")
-    audio_url = _kling_file_url(audio_file, "audio")
-    if not video_url or not audio_url:
+    if _is_image_file(avatar_file):
+        return avatar_file
+
+    if _is_video_file(avatar_file):
+        return _make_image_from_video(avatar_file, task_id)
+
+    logger.warning(f"unsupported Kling Avatar material type: {avatar_file}")
+    return ""
+
+
+def _kling_create_lip_sync(
+    task_id: str,
+    avatar_file: str,
+    audio_file: str,
+    script_text: str = "",
+) -> str:
+    avatar_image = _prepare_kling_avatar_image(task_id, avatar_file)
+    if not avatar_image:
+        return ""
+
+    if _config_str("kling_payload_format", "avatar").lower() == "avatar":
+        image_input = _kling_file_input(
+            avatar_image,
+            "spokesperson image",
+            _KLING_MAX_AVATAR_IMAGE_BYTES,
+        )
+        audio_input = _kling_file_input(
+            audio_file,
+            "audio",
+            _KLING_MAX_AUDIO_BYTES,
+        )
+    else:
+        image_input = _kling_file_url(avatar_image, "spokesperson image")
+        audio_input = _kling_file_url(audio_file, "audio")
+    if not image_input or not audio_input:
         return ""
 
     data = _kling_request(
         "POST",
-        _kling_lip_sync_path(),
-        payload=_kling_build_payload(video_url, audio_url, task_id),
+        _kling_avatar_path(),
+        payload=_kling_build_payload(image_input, audio_input, task_id, script_text),
     )
     kling_task_id = _kling_extract_task_id(data)
     if not kling_task_id:
-        logger.warning("Kling lip-sync response did not include a task id")
+        logger.warning("Kling Avatar response did not include a task id")
         return ""
-    logger.info(f"Kling lip-sync task submitted: {kling_task_id}")
+    logger.info(f"Kling Avatar task submitted: {kling_task_id}")
     return kling_task_id
 
 
@@ -968,13 +1109,13 @@ def _kling_wait_for_video(task_id: str) -> str:
 
         if status in failure_values:
             message = task_data.get("task_status_msg") or task_data.get("message") or ""
-            logger.warning(f"Kling lip-sync task failed: status={status}, message={message}")
+            logger.warning(f"Kling Avatar task failed: status={status}, message={message}")
             return ""
 
-        logger.info(f"Kling lip-sync task status: {status or 'pending'}")
+        logger.info(f"Kling Avatar task status: {status or 'pending'}")
         time.sleep(poll_interval)
 
-    logger.warning(f"Kling lip-sync task timed out after {timeout}s")
+    logger.warning(f"Kling Avatar task timed out after {timeout}s")
     return ""
 
 
@@ -984,7 +1125,12 @@ def _generate_with_kling(
     audio_file: str,
     script_text: str = "",
 ) -> str:
-    kling_task_id = _kling_create_lip_sync(task_id, avatar_file, audio_file)
+    kling_task_id = _kling_create_lip_sync(
+        task_id,
+        avatar_file,
+        audio_file,
+        script_text,
+    )
     if not kling_task_id:
         return ""
 

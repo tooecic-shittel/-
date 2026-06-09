@@ -1,3 +1,4 @@
+import base64
 import os
 import shutil
 from pathlib import Path
@@ -175,3 +176,93 @@ def test_kling_extracts_video_url_from_task_result():
         digital_human._kling_extract_video_url(task_data)
         == "https://cdn.example.test/kling-output.mp4"
     )
+
+
+def test_kling_avatar_payload_uses_official_fields():
+    snapshot = dict(config.app)
+    try:
+        config.app.update(
+            {
+                "kling_payload_format": "avatar",
+                "kling_avatar_mode": "std",
+                "kling_prompt": "",
+                "kling_audio_id": "",
+            }
+        )
+
+        payload = digital_human._kling_build_payload(
+            "https://cdn.example.test/avatar.jpg",
+            "https://cdn.example.test/audio.mp3",
+            "digital-human-kling",
+            "欢迎来店里看看今天的新品",
+        )
+
+        assert payload == {
+            "image": "https://cdn.example.test/avatar.jpg",
+            "sound_file": "https://cdn.example.test/audio.mp3",
+            "prompt": "欢迎来店里看看今天的新品",
+            "mode": "std",
+        }
+    finally:
+        _restore_config(snapshot)
+
+
+def test_kling_avatar_path_defaults_to_official_endpoint():
+    snapshot = dict(config.app)
+    try:
+        config.app.pop("kling_avatar_path", None)
+        config.app["kling_lip_sync_path"] = "/v1/videos/lip-sync"
+
+        assert (
+            digital_human._kling_avatar_path()
+            == "/v1/videos/avatar/image2video"
+        )
+    finally:
+        _restore_config(snapshot)
+
+
+def test_kling_avatar_uses_base64_when_public_url_is_not_configured(
+    monkeypatch,
+    tmp_path,
+):
+    snapshot = dict(config.app)
+    calls = {}
+
+    def fake_request(method, path, payload=None, timeout=None):
+        calls["method"] = method
+        calls["path"] = path
+        calls["payload"] = payload
+        return {"code": 0, "data": {"task_id": "kling-task-1"}}
+
+    try:
+        config.app.update(
+            {
+                "kling_payload_format": "avatar",
+                "kling_avatar_path": "/v1/videos/avatar/image2video",
+                "kling_public_base_url": "",
+                "endpoint": "",
+                "kling_avatar_mode": "std",
+                "kling_prompt": "",
+                "kling_audio_id": "",
+            }
+        )
+        avatar = tmp_path / "avatar.jpg"
+        audio = tmp_path / "audio.mp3"
+        avatar.write_bytes(b"avatar-image")
+        audio.write_bytes(b"avatar-audio")
+        monkeypatch.setattr(digital_human, "_kling_request", fake_request)
+
+        result = digital_human._kling_create_lip_sync(
+            "digital-human-kling-base64",
+            str(avatar),
+            str(audio),
+            "欢迎来店里看看今天的新品",
+        )
+
+        assert result == "kling-task-1"
+        assert calls["method"] == "POST"
+        assert calls["path"] == "/v1/videos/avatar/image2video"
+        assert calls["payload"]["image"] == base64.b64encode(b"avatar-image").decode()
+        assert calls["payload"]["sound_file"] == base64.b64encode(b"avatar-audio").decode()
+    finally:
+        _restore_config(snapshot)

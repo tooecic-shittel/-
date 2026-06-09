@@ -70,18 +70,21 @@ duix_cloud_training_level = ""
 duix_cloud_training_green_screen = ""
 duix_cloud_allow_local_urls = false
 
-# 可灵 Kling 数字人口播 / 对口型。适合“老板短视频 + 配音音频”
-# 做口型同步；照片路线需先接图生视频再进入 lip-sync。
-kling_base_url = "https://api-singapore.klingai.com"
+# 可灵 Kling Avatar 数字人口播。适合“老板照片/视频 + 配音音频”
+# 官方 Avatar 接口使用 image + sound_file；视频素材会先抽帧为人像图。
+kling_base_url = "https://api-beijing.klingai.com" # 国内开发者平台用北京区；海外账号可改为 https://api-singapore.klingai.com
 kling_access_key = ""
 kling_secret_key = ""
 kling_api_key = "" # 兼容只需要 Bearer Token 的中转网关；官方 AK/SK 可留空
-kling_public_base_url = "" # 公网可访问的本服务地址，例如 https://your-domain.example.com
-kling_lip_sync_path = "/v1/videos/lip-sync"
-kling_query_path_template = "" # 留空时依次尝试 /v1/videos/lip-sync/{task_id} 和 /v1/videos/{task_id}
-kling_payload_format = "input" # input / flat；不同兼容网关字段结构可能不同
+kling_public_base_url = "" # 官方 Avatar 可留空，系统会自动转 Base64；中转网关需要 URL 时再填公网地址
+kling_avatar_path = "/v1/videos/avatar/image2video"
+kling_query_path_template = "" # 留空时自动使用 /v1/videos/avatar/image2video/{task_id}
+kling_payload_format = "avatar" # avatar / input / flat；中转网关可能需要 input 或 flat
 kling_model_name = ""
-kling_lip_sync_mode = "audio2video"
+kling_avatar_mode = "std" # std / pro
+kling_prompt = "" # 可选，不能超过 2500 字符；用于描述数字人动作/情绪/运镜
+kling_audio_id = "" # 可选；填入后优先用 audio_id，而不是 sound_file URL
+kling_lip_sync_mode = "audio2video" # 兼容旧 lip-sync 网关
 kling_audio_type = "url"
 kling_callback_url = ""
 kling_timeout = 900

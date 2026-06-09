@@ -1545,20 +1545,24 @@ if show_admin_config:
 
                 kling_path_columns = st.columns(2)
                 with kling_path_columns[0]:
-                    kling_lip_sync_path = st.text_input(
-                        tr("Kling Lip Sync Path"),
+                    kling_avatar_path = st.text_input(
+                        tr("Kling Avatar Path"),
                         value=config.app.get(
-                            "kling_lip_sync_path", "/v1/videos/lip-sync"
+                            "kling_avatar_path",
+                            "/v1/videos/avatar/image2video",
                         ),
                     )
-                    config.app["kling_lip_sync_path"] = kling_lip_sync_path.strip()
+                    config.app["kling_avatar_path"] = kling_avatar_path.strip()
 
                     kling_payload_format = st.selectbox(
                         tr("Kling Payload Format"),
-                        options=["input", "flat"],
-                        index=0
-                        if config.app.get("kling_payload_format", "input") == "input"
-                        else 1,
+                        options=["avatar", "input", "flat"],
+                        index=["avatar", "input", "flat"].index(
+                            config.app.get("kling_payload_format", "avatar")
+                            if config.app.get("kling_payload_format", "avatar")
+                            in ["avatar", "input", "flat"]
+                            else "avatar"
+                        ),
                         help=tr("Kling Payload Format Help"),
                     )
                     config.app["kling_payload_format"] = kling_payload_format
@@ -1578,6 +1582,24 @@ if show_admin_config:
                         value=config.app.get("kling_model_name", ""),
                     )
                     config.app["kling_model_name"] = kling_model_name.strip()
+
+                kling_avatar_columns = st.columns(2)
+                with kling_avatar_columns[0]:
+                    kling_avatar_mode = st.selectbox(
+                        tr("Kling Avatar Mode"),
+                        options=["std", "pro"],
+                        index=0
+                        if config.app.get("kling_avatar_mode", "std") == "std"
+                        else 1,
+                    )
+                    config.app["kling_avatar_mode"] = kling_avatar_mode
+                with kling_avatar_columns[1]:
+                    kling_audio_id = st.text_input(
+                        tr("Kling Audio ID"),
+                        value=config.app.get("kling_audio_id", ""),
+                        help=tr("Kling Audio ID Help"),
+                    )
+                    config.app["kling_audio_id"] = kling_audio_id.strip()
 
             elif selected_provider_value == "duix_cloud":
                 duix_cloud_base_url = st.text_input(
