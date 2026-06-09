@@ -32,8 +32,8 @@ from app.services import state as sm
 from app.services import task as tm
 from app.utils import utils
 
-APP_BRAND_NAME = "爪爪电商短视频工作流"
-APP_TAGLINE = "提取爆款视频文案和风格，生成真实感电商宣传短视频"
+APP_BRAND_NAME = "爪爪IP短视频工作流"
+APP_TAGLINE = "提取爆款视频文案和风格，生成真实感老板IP宣传短视频"
 logo_file = os.path.join(root_dir, "resource", "public", "zaozhao-logo.svg")
 GENERATION_TASK_QUERY_PARAM = "task"
 
@@ -44,7 +44,7 @@ st.set_page_config(
     initial_sidebar_state="auto",
     menu_items={
         "Report a bug": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
-        "About": f"# {APP_BRAND_NAME}\n基于 MoneyPrinterTurbo 的稳定底座，增加电商爆款改编助手。",
+        "About": f"# {APP_BRAND_NAME}\n基于 MoneyPrinterTurbo 的稳定底座，增加老板IP爆款改编助手。",
     },
 )
 

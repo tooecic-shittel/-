@@ -174,10 +174,10 @@ hostname = socket.gethostname()
 log_level = _cfg.get("log_level", "DEBUG")
 listen_host = _cfg.get("listen_host", "0.0.0.0")
 listen_port = _cfg.get("listen_port", 8080)
-project_name = _cfg.get("project_name", "爪爪电商短视频工作流")
+project_name = _cfg.get("project_name", "爪爪IP短视频工作流")
 project_description = _cfg.get(
     "project_description",
-    "基于 MoneyPrinterTurbo 的稳定短视频生成底座，增加电商爆款改编助手。"
+    "基于 MoneyPrinterTurbo 的稳定短视频生成底座，增加老板IP爆款改编助手。"
     "<br><small>Supported by <a href='https://aihubmix.com/?aff=CEve'>AIHubMix</a></small>",
 )
 project_version = _cfg.get("project_version", "1.2.9")
