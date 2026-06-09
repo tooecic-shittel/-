@@ -12,6 +12,7 @@
 /storage/
 /.idea/
 /.tools/
+/tools/
 /app/services/__pycache__
 /app/__pycache__/
 /app/config/__pycache__/

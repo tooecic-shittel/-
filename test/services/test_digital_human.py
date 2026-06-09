@@ -121,3 +121,53 @@ def test_duix_provider_copies_result(monkeypatch, tmp_path):
     finally:
         _restore_config(snapshot)
         shutil.rmtree(task_dir, ignore_errors=True)
+
+
+def test_kling_provider_uses_jwt_headers(monkeypatch):
+    snapshot = dict(config.app)
+    try:
+        config.app.update(
+            {
+                "digital_human_provider": "kling",
+                "kling_access_key": "test-access-key",
+                "kling_secret_key": "test-secret-key",
+                "kling_api_key": "",
+                "kling_jwt_ttl": 1800,
+                "kling_jwt_nbf_skew": 5,
+            }
+        )
+        monkeypatch.setattr(digital_human.time, "time", lambda: 1000)
+
+        headers = digital_human._kling_headers()
+
+        assert headers["Authorization"].startswith("Bearer ")
+        token = headers["Authorization"].removeprefix("Bearer ")
+        decoded = digital_human.jwt.decode(
+            token,
+            "test-secret-key",
+            algorithms=["HS256"],
+            options={"verify_exp": False, "verify_nbf": False},
+        )
+        assert decoded["iss"] == "test-access-key"
+        assert decoded["exp"] == 2800
+        assert decoded["nbf"] == 995
+    finally:
+        _restore_config(snapshot)
+
+
+def test_kling_extracts_video_url_from_task_result():
+    task_data = {
+        "task_status": "succeed",
+        "task_result": {
+            "videos": [
+                {
+                    "url": "https://cdn.example.test/kling-output.mp4",
+                }
+            ]
+        },
+    }
+
+    assert (
+        digital_human._kling_extract_video_url(task_data)
+        == "https://cdn.example.test/kling-output.mp4"
+    )

@@ -1479,6 +1479,7 @@ if show_admin_config:
             st.write(tr("Digital Human Settings"))
             digital_human_provider_options = [
                 (tr("Digital Human Off"), "none"),
+                (tr("Kling Lip Sync"), "kling"),
                 (tr("Duix Cloud AIGC"), "duix_cloud"),
                 (tr("Duix Local Avatar"), "duix"),
             ]
@@ -1499,7 +1500,86 @@ if show_admin_config:
             ][1]
             selected_provider_value = config.app["digital_human_provider"]
 
-            if selected_provider_value == "duix_cloud":
+            if selected_provider_value == "kling":
+                kling_base_url = st.text_input(
+                    tr("Kling Base URL"),
+                    value=config.app.get(
+                        "kling_base_url", "https://api-singapore.klingai.com"
+                    ),
+                    help=tr("Kling Base URL Help"),
+                )
+                config.app["kling_base_url"] = kling_base_url.strip()
+
+                kling_access_key = st.text_input(
+                    tr("Kling Access Key"),
+                    value=config.app.get("kling_access_key", ""),
+                    type="password",
+                    help=tr("Kling Access Key Help"),
+                )
+                config.app["kling_access_key"] = kling_access_key.strip()
+
+                kling_secret_key = st.text_input(
+                    tr("Kling Secret Key"),
+                    value=config.app.get("kling_secret_key", ""),
+                    type="password",
+                )
+                config.app["kling_secret_key"] = kling_secret_key.strip()
+
+                kling_api_key = st.text_input(
+                    tr("Kling API Key"),
+                    value=config.app.get("kling_api_key", ""),
+                    type="password",
+                    help=tr("Kling API Key Help"),
+                )
+                config.app["kling_api_key"] = kling_api_key.strip()
+
+                kling_public_base_url = st.text_input(
+                    tr("Kling Public Base URL"),
+                    value=config.app.get(
+                        "kling_public_base_url",
+                        config.app.get("endpoint", ""),
+                    ),
+                    help=tr("Kling Public Base URL Help"),
+                )
+                config.app["kling_public_base_url"] = kling_public_base_url.strip()
+
+                kling_path_columns = st.columns(2)
+                with kling_path_columns[0]:
+                    kling_lip_sync_path = st.text_input(
+                        tr("Kling Lip Sync Path"),
+                        value=config.app.get(
+                            "kling_lip_sync_path", "/v1/videos/lip-sync"
+                        ),
+                    )
+                    config.app["kling_lip_sync_path"] = kling_lip_sync_path.strip()
+
+                    kling_payload_format = st.selectbox(
+                        tr("Kling Payload Format"),
+                        options=["input", "flat"],
+                        index=0
+                        if config.app.get("kling_payload_format", "input") == "input"
+                        else 1,
+                        help=tr("Kling Payload Format Help"),
+                    )
+                    config.app["kling_payload_format"] = kling_payload_format
+
+                with kling_path_columns[1]:
+                    kling_query_path_template = st.text_input(
+                        tr("Kling Query Path Template"),
+                        value=config.app.get("kling_query_path_template", ""),
+                        help=tr("Kling Query Path Template Help"),
+                    )
+                    config.app["kling_query_path_template"] = (
+                        kling_query_path_template.strip()
+                    )
+
+                    kling_model_name = st.text_input(
+                        tr("Kling Model Name"),
+                        value=config.app.get("kling_model_name", ""),
+                    )
+                    config.app["kling_model_name"] = kling_model_name.strip()
+
+            elif selected_provider_value == "duix_cloud":
                 duix_cloud_base_url = st.text_input(
                     tr("Duix Cloud Base URL"),
                     value=config.app.get("duix_cloud_base_url", "https://meta.guiji.ai"),

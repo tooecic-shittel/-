@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import requests
+import jwt
 from loguru import logger
 
 from app.config import config
@@ -21,6 +22,8 @@ _DUIX_DEFAULT_WORKSPACE_DIR = "~/duix_avatar_data/face2face/temp"
 _DUIX_CLOUD_DEFAULT_BASE_URL = "https://meta.guiji.ai"
 _DUIX_CLOUD_DEFAULT_TIMEOUT_SECONDS = 900
 _DUIX_CLOUD_TOKEN_REFRESH_SKEW_SECONDS = 60
+_KLING_DEFAULT_BASE_URL = "https://api-singapore.klingai.com"
+_KLING_DEFAULT_TIMEOUT_SECONDS = 900
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 _LOCAL_URL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
@@ -36,6 +39,10 @@ def is_configured() -> bool:
         return bool(_duix_video_base_url())
     if provider == "duix_cloud":
         return bool(_duix_cloud_access_key() and _duix_cloud_secret_key())
+    if provider == "kling":
+        return bool(_kling_access_key() and _kling_secret_key()) or bool(
+            _kling_api_key()
+        )
     return False
 
 
@@ -67,6 +74,13 @@ def generate(
         )
     if provider == "duix_cloud":
         return _generate_with_duix_cloud(
+            task_id=task_id,
+            avatar_file=photo_file,
+            audio_file=audio_file,
+            script_text=script_text,
+        )
+    if provider == "kling":
+        return _generate_with_kling(
             task_id=task_id,
             avatar_file=photo_file,
             audio_file=audio_file,
@@ -654,6 +668,325 @@ def _generate_with_duix_cloud(
         return ""
 
     video_url = _duix_cloud_wait_for_video(video_id)
+    if not video_url:
+        return ""
+
+    output_file = os.path.join(utils.task_dir(task_id), "digital-human.mp4")
+    if not _download_result(video_url, output_file):
+        return ""
+    return output_file
+
+
+def _kling_base_url() -> str:
+    return _config_str("kling_base_url", _KLING_DEFAULT_BASE_URL).rstrip("/")
+
+
+def _kling_access_key() -> str:
+    return _config_str("kling_access_key")
+
+
+def _kling_secret_key() -> str:
+    return _config_str("kling_secret_key")
+
+
+def _kling_api_key() -> str:
+    # Some compatible gateways expose a plain bearer token instead of AK/SK JWT.
+    return _config_str("kling_api_key")
+
+
+def _kling_request_timeout() -> int:
+    return max(5, int(config.app.get("kling_request_timeout", 30) or 30))
+
+
+def _kling_endpoint(path: str) -> str:
+    return f"{_kling_base_url()}/{path.lstrip('/')}"
+
+
+def _kling_headers() -> dict:
+    api_key = _kling_api_key()
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+
+    access_key = _kling_access_key()
+    secret_key = _kling_secret_key()
+    if not access_key or not secret_key:
+        logger.warning("Kling access key or secret key is not configured")
+        return {}
+
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": access_key,
+            "exp": now + int(config.app.get("kling_jwt_ttl", 1800) or 1800),
+            "nbf": now - int(config.app.get("kling_jwt_nbf_skew", 5) or 5),
+        },
+        secret_key,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _kling_success(data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+    code = data.get("code")
+    if code is None:
+        return "data" in data
+    return str(code).strip() in {"0", "200"}
+
+
+def _kling_request(
+    method: str,
+    path: str,
+    payload: dict | None = None,
+    timeout: int | None = None,
+) -> dict:
+    headers = _kling_headers()
+    if not headers:
+        return {}
+    headers["Content-Type"] = "application/json"
+
+    try:
+        response = requests.request(
+            method=method,
+            url=_kling_endpoint(path),
+            json=payload,
+            headers=headers,
+            timeout=timeout or _kling_request_timeout(),
+            verify=config.app.get("tls_verify", True),
+        )
+    except Exception as exc:
+        logger.warning(f"failed to request Kling {path}: {str(exc)}")
+        return {}
+
+    if response.status_code >= 400:
+        logger.warning(f"Kling {path} failed: {response.status_code}")
+        return {}
+
+    data = _safe_json(response)
+    if not _kling_success(data):
+        logger.warning(
+            f"Kling {path} returned an error: "
+            f"{data.get('code')} {data.get('message', '')}"
+        )
+        return {}
+    return data
+
+
+def _kling_public_base_url() -> str:
+    return (_config_str("kling_public_base_url") or _config_str("endpoint")).rstrip("/")
+
+
+def _kling_url_is_allowed(url: str) -> bool:
+    if config.app.get("kling_allow_local_urls", False):
+        return True
+    return _duix_cloud_url_is_allowed(url)
+
+
+def _kling_file_url(file_path: str, purpose: str) -> str:
+    if _looks_like_url(file_path):
+        return file_path
+
+    if not file_path or not os.path.exists(file_path):
+        logger.warning(f"Kling {purpose} file does not exist")
+        return ""
+
+    public_base_url = _kling_public_base_url()
+    if not public_base_url:
+        logger.warning(
+            "Kling needs kling_public_base_url or endpoint to expose "
+            f"the {purpose} file as a public URL"
+        )
+        return ""
+
+    if not _kling_url_is_allowed(public_base_url):
+        logger.warning(
+            "Kling public base URL must be reachable from the public internet; "
+            "localhost or private network URLs are not accepted by default"
+        )
+        return ""
+
+    tasks_root = os.path.abspath(utils.task_dir())
+    resolved_path = os.path.abspath(file_path)
+    if not resolved_path.startswith(tasks_root + os.sep):
+        logger.warning(f"Kling {purpose} file is not under the task storage dir")
+        return ""
+
+    relative_path = os.path.relpath(resolved_path, tasks_root).replace(os.sep, "/")
+    return f"{public_base_url.rstrip('/')}/tasks/{quote(relative_path, safe='/')}"
+
+
+def _kling_lip_sync_path() -> str:
+    return _config_str("kling_lip_sync_path", "/v1/videos/lip-sync")
+
+
+def _kling_query_paths(task_id: str) -> list[str]:
+    configured = _config_str("kling_query_path_template")
+    paths = []
+    if configured:
+        paths.append(configured.format(task_id=task_id))
+
+    lip_sync_path = _kling_lip_sync_path().rstrip("/")
+    paths.extend(
+        [
+            f"{lip_sync_path}/{task_id}",
+            f"/v1/videos/{task_id}",
+        ]
+    )
+
+    unique_paths = []
+    for path in paths:
+        if path and path not in unique_paths:
+            unique_paths.append(path)
+    return unique_paths
+
+
+def _kling_build_payload(video_url: str, audio_url: str, task_id: str) -> dict:
+    payload_format = _config_str("kling_payload_format", "input").lower()
+    model_name = _config_str("kling_model_name")
+
+    if payload_format == "flat":
+        payload = {
+            "video_url": video_url,
+            "audio_url": audio_url,
+        }
+        if model_name:
+            payload["model_name"] = model_name
+        return payload
+
+    payload = {
+        "input": {
+            "video_url": video_url,
+            "mode": _config_str("kling_lip_sync_mode", "audio2video"),
+            "audio_type": _config_str("kling_audio_type", "url"),
+            "audio_url": audio_url,
+        }
+    }
+    if model_name:
+        payload["model_name"] = model_name
+
+    callback_url = _config_str("kling_callback_url")
+    if callback_url:
+        payload["callback_url"] = callback_url
+
+    external_task_id = _config_str("kling_external_task_id_prefix")
+    if external_task_id:
+        payload["external_task_id"] = f"{external_task_id}-{task_id}"
+
+    return payload
+
+
+def _kling_extract_task_id(data: dict) -> str:
+    task_data = data.get("data") or data
+    for key in ("task_id", "taskId", "id"):
+        if isinstance(task_data, dict) and task_data.get(key):
+            return str(task_data[key])
+    return ""
+
+
+def _kling_extract_video_url(task_data: dict) -> str:
+    for key in ("video_url", "videoUrl", "url"):
+        if task_data.get(key):
+            return str(task_data[key])
+
+    result = task_data.get("task_result") or task_data.get("taskResult") or {}
+    if isinstance(result, dict):
+        for key in ("video_url", "videoUrl", "url"):
+            if result.get(key):
+                return str(result[key])
+        videos = result.get("videos")
+        if isinstance(videos, list):
+            for item in videos:
+                if isinstance(item, dict):
+                    for key in ("url", "video_url", "videoUrl"):
+                        if item.get(key):
+                            return str(item[key])
+    return ""
+
+
+def _kling_status_value(task_data: dict) -> str:
+    for key in ("task_status", "taskStatus", "status"):
+        if task_data.get(key) is not None:
+            return str(task_data[key]).strip().lower()
+    return ""
+
+
+def _kling_create_lip_sync(task_id: str, avatar_file: str, audio_file: str) -> str:
+    if not _is_video_file(avatar_file):
+        logger.warning(
+            "Kling lip-sync currently requires a spokesperson video; "
+            "photo-only material should use another image-to-video route first"
+        )
+        return ""
+
+    video_url = _kling_file_url(avatar_file, "spokesperson video")
+    audio_url = _kling_file_url(audio_file, "audio")
+    if not video_url or not audio_url:
+        return ""
+
+    data = _kling_request(
+        "POST",
+        _kling_lip_sync_path(),
+        payload=_kling_build_payload(video_url, audio_url, task_id),
+    )
+    kling_task_id = _kling_extract_task_id(data)
+    if not kling_task_id:
+        logger.warning("Kling lip-sync response did not include a task id")
+        return ""
+    logger.info(f"Kling lip-sync task submitted: {kling_task_id}")
+    return kling_task_id
+
+
+def _kling_wait_for_video(task_id: str) -> str:
+    timeout = int(
+        config.app.get("kling_timeout", _KLING_DEFAULT_TIMEOUT_SECONDS)
+        or _KLING_DEFAULT_TIMEOUT_SECONDS
+    )
+    poll_interval = max(5, int(config.app.get("kling_poll_interval", 5) or 5))
+    deadline = time.time() + timeout
+    success_values = {"succeed", "succeeded", "success", "completed", "complete", "3"}
+    failure_values = {"failed", "fail", "failure", "error", "4", "5", "6", "7"}
+
+    while time.time() < deadline:
+        task_data = {}
+        for path in _kling_query_paths(task_id):
+            data = _kling_request("GET", path)
+            task_data = data.get("data") or data
+            if task_data:
+                break
+
+        status = _kling_status_value(task_data)
+        if status in success_values:
+            video_url = _kling_extract_video_url(task_data)
+            if video_url:
+                logger.success("Kling digital human video is ready")
+                return video_url
+            logger.warning("Kling task succeeded without video URL")
+            return ""
+
+        if status in failure_values:
+            message = task_data.get("task_status_msg") or task_data.get("message") or ""
+            logger.warning(f"Kling lip-sync task failed: status={status}, message={message}")
+            return ""
+
+        logger.info(f"Kling lip-sync task status: {status or 'pending'}")
+        time.sleep(poll_interval)
+
+    logger.warning(f"Kling lip-sync task timed out after {timeout}s")
+    return ""
+
+
+def _generate_with_kling(
+    task_id: str,
+    avatar_file: str,
+    audio_file: str,
+    script_text: str = "",
+) -> str:
+    kling_task_id = _kling_create_lip_sync(task_id, avatar_file, audio_file)
+    if not kling_task_id:
+        return ""
+
+    video_url = _kling_wait_for_video(kling_task_id)
     if not video_url:
         return ""
 
