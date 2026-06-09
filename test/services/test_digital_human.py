@@ -130,7 +130,7 @@ def test_kling_provider_uses_jwt_headers(monkeypatch):
             {
                 "digital_human_provider": "kling",
                 "kling_access_key": "test-access-key",
-                "kling_secret_key": "test-secret-key",
+                "kling_secret_key": "test-secret-key-with-at-least-32-bytes",
                 "kling_api_key": "",
                 "kling_jwt_ttl": 1800,
                 "kling_jwt_nbf_skew": 5,
@@ -142,9 +142,11 @@ def test_kling_provider_uses_jwt_headers(monkeypatch):
 
         assert headers["Authorization"].startswith("Bearer ")
         token = headers["Authorization"].removeprefix("Bearer ")
+        token_headers = digital_human.jwt.get_unverified_header(token)
+        assert token_headers["typ"] == "JWT"
         decoded = digital_human.jwt.decode(
             token,
-            "test-secret-key",
+            "test-secret-key-with-at-least-32-bytes",
             algorithms=["HS256"],
             options={"verify_exp": False, "verify_nbf": False},
         )
@@ -157,14 +159,16 @@ def test_kling_provider_uses_jwt_headers(monkeypatch):
 
 def test_kling_extracts_video_url_from_task_result():
     task_data = {
-        "task_status": "succeed",
-        "task_result": {
-            "videos": [
-                {
-                    "url": "https://cdn.example.test/kling-output.mp4",
-                }
-            ]
-        },
+        "data": {
+            "task_status": "succeed",
+            "task_result": {
+                "videos": [
+                    {
+                        "url": "https://cdn.example.test/kling-output.mp4",
+                    }
+                ]
+            },
+        }
     }
 
     assert (

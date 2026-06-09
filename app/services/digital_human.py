@@ -722,6 +722,7 @@ def _kling_headers() -> dict:
         },
         secret_key,
         algorithm="HS256",
+        headers={"alg": "HS256", "typ": "JWT"},
     )
     return {"Authorization": f"Bearer {token}"}
 
@@ -885,6 +886,7 @@ def _kling_extract_task_id(data: dict) -> str:
 
 
 def _kling_extract_video_url(task_data: dict) -> str:
+    task_data = task_data.get("data") or task_data
     for key in ("video_url", "videoUrl", "url"):
         if task_data.get(key):
             return str(task_data[key])
